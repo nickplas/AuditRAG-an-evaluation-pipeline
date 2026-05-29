@@ -1,0 +1,18 @@
+[project]
+name = "auditrag-an-evaluation-pipeline"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mlflow>=3.12.0",
+    "pydantic-settings>=2.14.1",
+    "streamlit>=1.58.0",
+    "torch>=2.12.0",
+    "torchvision>=0.27.0",
+]
+
+[tool.uv.workspace]
+members = [
+    "src",
+]
