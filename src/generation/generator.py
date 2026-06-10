@@ -1,16 +1,5 @@
 """
-generation/generator.py — Answer generation with citation and hallucination guard.
-
-Design notes
-------------
-• The generator is deliberately conservative: if retrieved context is weak
-  (all scores below threshold) it refuses to answer rather than hallucinate.
-• Every claim in the answer is tied back to a specific retrieved chunk via
-  an inline [1], [2] citation system — auditability by design.
-• The KnowledgeGraph cross-check runs post-generation and adds a
-  `kg_flags` field to the response so consumers can surface warnings.
-• Model is HuggingFace-native (flan-t5 by default); swap the model_name
-  in config.py for any seq2seq or causal LM.
+generation/generator.py 
 """
 
 from __future__ import annotations

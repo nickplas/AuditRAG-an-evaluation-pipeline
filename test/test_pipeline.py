@@ -20,16 +20,15 @@ from src.pipeline import RAGPipeline
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 CORPUS = [
-    "Fincantieri is an Italian shipbuilding company headquartered in Trieste. "
-    "It is one of the world's largest shipbuilders.",
-    "Generali is a multinational insurance company founded in Trieste in 1831. "
-    "It is one of the largest insurance groups in the world.",
-    "Agorai is a B2B AI Innovation Hub backed by Generali, Fincantieri, Illy, "
-    "and Regione FVG. It is based in Trieste, Italy.",
-    "Retrieval-Augmented Generation (RAG) combines a retrieval system with a "
-    "generative language model to produce grounded, citable answers.",
-    "Hallucination in language models refers to the generation of factually "
-    "incorrect or unsupported content.",
+   "Bread is a staple food prepared from a dough of flour and water, usually by baking. "
+   "It has been a prominent food in large parts of the world and is considered one of the oldest human-made foods, dating back thousands of years."
+    "The most common ingredients in bread making are wheat flour, water, yeast, and salt. "
+    "Yeast is a microscopic fungus that plays a crucial role in the baking process. "
+    "It consumes sugars present in the flour and releases carbon dioxide gas. "
+    "This gas gets trapped in the stretchy dough, causing it to expand and rise, which ultimately gives the baked bread its soft, airy texture."
+    "There are countless varieties of bread across different cultures. "
+    "Sourdough, for example, relies on a fermented starter of naturally occurring yeast and bacteria, giving it a distinct tangy flavor. "
+    "Meanwhile, baguettes are long, thin loaves originating from France that are famous for their very crispy crust.",
 ]
 
 
@@ -83,25 +82,25 @@ class TestIngestor:
 
 class TestRetriever:
     def test_returns_results(self, vector_store):
-        results = vector_store.search("What is Generali?", top_k=3)
+        results = vector_store.search("What is bread?", top_k=3)
         assert len(results) > 0
 
     def test_results_have_scores(self, vector_store):
-        results = vector_store.search("Fincantieri shipbuilding", top_k=3)
+        results = vector_store.search("Sourdough and baguettes", top_k=3)
         for r in results:
             assert 0.0 <= r.score <= 1.0
 
     def test_relevant_chunk_ranked_first(self, vector_store):
-        results = vector_store.search("Generali insurance Trieste", top_k=3)
-        assert "Generali" in results[0].chunk.text
+        results = vector_store.search("Yeast and carbon dioxide", top_k=3)
+        assert "Yeast" in results[0].chunk.text
 
     def test_top_k_respected(self, vector_store):
-        results = vector_store.search("AI research", top_k=2)
+        results = vector_store.search("French bread", top_k=2)
         assert len(results) <= 2
 
     def test_is_relevant_flag(self, vector_store):
         # Highly specific query should return at least one relevant result
-        results = vector_store.search("Agorai Innovation Hub", top_k=5)
+        results = vector_store.search("Microscopic fungus fermentation", top_k=5)
         assert any(r.is_relevant for r in results)
 
     def test_out_of_domain_low_score(self, vector_store):
@@ -138,7 +137,7 @@ class TestPipeline:
 
     def test_retrieval_returns_results(self, pipeline):
         # Access vector store directly (bypass LLM for speed)
-        results = pipeline.vector_store.search("Generali insurance", top_k=3)
+        results = pipeline.vector_store.search("Bread ingredients", top_k=3)
         assert len(results) > 0
 
     def test_empty_query_handled(self, pipeline):
@@ -153,11 +152,11 @@ class TestPipeline:
         from src.generation.generator import RAGResponse as RR
 
         mock_response = RR(
-            answer="Generali is an insurance company [1].",
+            answer="Bread rises because yeast consumes sugars in the flour and releases carbon dioxide gas, which gets trapped in the dough and causes it to expand [1].",
             citations=[{
                 "index": 1, "chunk_id": "test__chunk_0",
                 "source": "test", "page": None,
-                "score": 0.9, "text": "Generali is…",
+                "score": 0.9, "text": "Bread rises because…",
             }],
             confidence=0.9,
             refused=False,
@@ -172,7 +171,7 @@ class TestPipeline:
             mock_gen.generate.return_value = mock_response
             mock_gen_fn.return_value = mock_gen
 
-            response = pipeline.query("What is Generali?")
+            response = pipeline.query("Why does bread rise?")
 
         assert response.answer
         assert isinstance(response.citations, list)

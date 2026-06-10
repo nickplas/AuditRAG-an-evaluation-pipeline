@@ -21,7 +21,7 @@ from loguru import logger
 
 from src.config import settings
 from src.ingestion.ingestor import DocumentIngestor, Chunk
-from src.retrieval.retriever import Embedder, VectorStore
+from src.retrieval.retriever import Embedder, VectorStore, Retriever 
 from src.generation.generator import RAGGenerator, RAGResponse
 from src.knowledge_graph.kg_builder import KnowledgeGraphBuilder, KnowledgeGraph
 
@@ -45,15 +45,17 @@ class RAGPipeline:
         in_memory: bool = False,
         use_knowledge_graph: bool = True,
         llm_model: str = settings.llm_model,
+        retrieval_mode: str = "hybrid",
     ):
         logger.info("Initialising RAG pipeline…")
 
         self.ingestor = DocumentIngestor()
         self.embedder = Embedder()
-        self.vector_store = VectorStore(
+        self.retriever = Retriever(
             embedder=self.embedder,
             in_memory=in_memory,
         )
+        self.retrieval_mode = retrieval_mode
 
         self._kg_enabled = use_knowledge_graph
         self._kg_builder = KnowledgeGraphBuilder() if use_knowledge_graph else None
@@ -73,17 +75,17 @@ class RAGPipeline:
         Index documents from a directory path or a pre-built list of Chunks.
         Also builds the knowledge graph if enabled.
         """
-        if isinstance(source, Path):
-            chunks = self.ingestor.ingest_directory(source)
-        else:
-            chunks = source
+        chunks = (
+            self.ingestor.ingest_directory(source)
+            if isinstance(source, Path)
+            else source
+        )
 
         if not chunks:
             logger.warning("No chunks to index.")
             return
 
-        logger.info(f"Indexing {len(chunks)} chunks into vector store…")
-        self.vector_store.index_chunks(chunks)
+        self.retriever.index_chunks(chunks)
 
         if self._kg_enabled and self._kg_builder is not None:
             logger.info("Building knowledge graph…")
@@ -101,6 +103,7 @@ class RAGPipeline:
         self,
         query: str,
         top_k: int = settings.top_k,
+        retrieval_mode: str | None = None,
     ) -> RAGResponse:
         """
         Run a query through the full pipeline.
@@ -122,14 +125,9 @@ class RAGPipeline:
                 refusal_reason="Query is empty.",
             )
 
-        # Retrieve
-        retrieved = self.vector_store.search(query, top_k=top_k)
-
-        # Generate
-        generator = self._get_generator()
-        response = generator.generate(query, retrieved, top_k=top_k)
-
-        return response
+        mode = retrieval_mode or self.retrieval_mode
+        retrieved = self.retriever.search(query, top_k=top_k, mode=mode)
+        return self._get_generator().generate(query, retrieved, top_k=top_k)
 
     # ── Persistence helpers ───────────────────────────────────────────────
 
@@ -148,7 +146,7 @@ class RAGPipeline:
 
     @property
     def collection_size(self) -> int:
-        return self.vector_store.collection_size()
+        return self.retriever.collection_size()
 
     @property
     def knowledge_graph(self) -> KnowledgeGraph | None:

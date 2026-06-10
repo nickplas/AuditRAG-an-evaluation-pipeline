@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # Retrieval
     top_k: int = 5
-    score_threshold: float = 0.3
+    score_threshold: float = 0.0001
     qdrant_host : str = "localhost"
     qdrant_port : int = 6333
     qdrant_collection: str = "rag_corpus"
@@ -48,5 +48,6 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8"
     )
+    retrieval_mode: str = "hybrid"  # "hybrid", "bm25", "semantic"
 
 settings = Settings()

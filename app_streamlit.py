@@ -276,11 +276,12 @@ with st.sidebar:
  
     # ── Document indexing ──────────────────────────────────────────────────
     st.markdown("#### 📂 Index Documents")
+    st.caption("Supported: PDF · Word · Excel · PowerPoint · HTML · CSV · Markdown · TXT")
  
     # Option A: upload files
     uploaded_files = st.file_uploader(
         "Upload files",
-        type=["txt", "pdf"],
+        type=["txt", "md", "pdf", "docx", "doc", "pptx", "ppt", "xlsx", "xls", "html", "htm", "csv", "json", "xml", "epub"],
         accept_multiple_files=True,
         label_visibility="collapsed",
     )
@@ -497,6 +498,12 @@ else:
  
                         page_str = f" · page {c['page']}" if c.get('page') else ""
                         source_short = Path(c['source']).name if c['source'] else c['source']
+                        section_str = c.get('section') or c.get('metadata', {}).get('section', '')
+                        section_html = (
+                            f'<div style="font-family:\'IBM Plex Mono\',monospace; font-size:0.72rem;'
+                            f' color:#58a6ff; margin-top:4px;">§ {section_str}</div>'
+                            if section_str else ''
+                        )
  
                         st.markdown(f"""
                         <div class="rag-card" style="margin-bottom:0.7rem;">
@@ -514,6 +521,7 @@ else:
                                     {score_pct}% match
                                 </span>
                             </div>
+                            {section_html}
                             <div class="score-bar-bg">
                                 <div class="score-bar-fill" style="width:{score_pct}%;
                                      background: linear-gradient(90deg, #1f6feb, {score_color});"></div>
