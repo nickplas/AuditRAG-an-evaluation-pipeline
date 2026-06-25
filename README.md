@@ -52,6 +52,13 @@ Documents
 
 ---
 
+### Requirements
+
+- Python 3.10+
+- uv — this project is managed entirely with uv
+- (Optional) A running Qdrant server if you want persistent, out-of-process vector storage. Everything below works without it via Qdrant's in-memory mode. 
+
+
 ### 1. Install
 
 ```bash
@@ -63,22 +70,15 @@ uv sync
 source .venv/bin/activate
 ```
 
-### 2. Run the demo (no GPU, no server needed)
-
-```bash
-python scripts/demo.py
-```
-
-This runs the full pipeline in-memory on a synthetic corpus, prints cited answers,
-shows the refusal mechanism, and runs the evaluation harness.
-
-### 3. Run tests
+### 2. Run tests
 
 ```bash
 pytest tests/ -v
 ```
 
-### 4. Start the API
+### 3. Start the API
+
+An interactive UI for uploading documents and asking questions, with full citation/audit panels:
 
 ``` 
 streamlit run app_streamlit.py 

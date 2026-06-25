@@ -343,10 +343,6 @@ class Retriever:
             self.bm25_index.index_chunks(chunks)
         else:
             logger.warning("BM25 index skipped (rank-bm25 not installed).")
-
-    def collection_size(self) -> int:
-        info = self.client.get_collection(self.collection_name)
-        return info.points_count
  
     def search(
         self,

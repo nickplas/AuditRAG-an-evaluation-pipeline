@@ -137,7 +137,7 @@ class TestPipeline:
 
     def test_retrieval_returns_results(self, pipeline):
         # Access vector store directly (bypass LLM for speed)
-        results = pipeline.vector_store.search("Bread ingredients", top_k=3)
+        results = pipeline.retriever.search("Bread ingredients", top_k=3)
         assert len(results) > 0
 
     def test_empty_query_handled(self, pipeline):
