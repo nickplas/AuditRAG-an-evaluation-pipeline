@@ -45,12 +45,17 @@ def _reciprocal_rank_fusion(
     k: int = 60,
 ) -> list[RetrievedChunk]:
     """
-    Combine any number of ranked lists using Reciprocal Rank Fusion.
- 
-    RRF score for a chunk = Σ  1 / (k + rank_in_list_i)
- 
-    k=60 is the standard default from the original paper (Cormack 2009).
-    Higher k reduces the influence of top-ranked items; lower k amplifies it.
+    Combine any number of ranked lists using Reciprocal Rank Fusion,
+    normalized to a [0, 1] scale.
+
+    Raw RRF score = Σ 1 / (k + rank_in_list_i). With k=60, that caps out at
+    len(ranked_lists) / 61 (~0.033 for two lists) even for a chunk ranked
+    #1 in every list — nowhere near 1.0. Left un-normalized, anything that
+    displays this score as a percentage (citation match %, answer
+    confidence %) or color-codes it against a 0-1 threshold will always
+    look like a bad match regardless of actual retrieval quality.
+    Dividing by the theoretical maximum puts fused scores on the same
+    scale as semantic/BM25 scores, which are already ~0-1.
     """
     scores: dict[str, float] = {}
     chunk_map: dict[str, RetrievedChunk] = {}
@@ -61,13 +66,15 @@ def _reciprocal_rank_fusion(
             scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank)
             chunk_map[cid] = rc
  
+    max_possible = len(ranked_lists) / (k + 1) if ranked_lists else 1.0
     fused = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     result = []
     for cid, rrf_score in fused:
         rc = chunk_map[cid]
+        normalized = (rrf_score / max_possible) if max_possible > 0 else 0.0
         result.append(RetrievedChunk(
             chunk=rc.chunk,
-            score=round(rrf_score, 6),
+            score=round(normalized, 6),
             retrieval_mode=settings.retrieval_mode,
         ))
     return result
@@ -83,7 +90,10 @@ class RetrievedChunk:
     @property
     def is_relevant(self) -> bool:
         if self.retrieval_mode == "hybrid":
-            return self.score >= 0.005
+            # 0.15 of the now-normalized [0,1] scale == the same relative
+            # strictness as the old un-normalized threshold (0.005 out of
+            # a ~0.033 ceiling). Behavior is unchanged; only the scale is.
+            return self.score >= 0.15
         if self.retrieval_mode == "bm25":
             return self.score >= 0.01
         return self.score >= settings.score_threshold

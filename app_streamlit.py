@@ -10,12 +10,29 @@ Uses in_memory=True so no Qdrant server is needed.
  
 import sys
 from pathlib import Path
-import time
- 
+
 sys.path.insert(0, str(Path(__file__).parent))
- 
+
 import streamlit as st
- 
+
+
+def render_html(html: str) -> None:
+    """
+    Render raw HTML via st.markdown without it ever being mistaken for an
+    indented code block.
+
+    st.markdown still runs content through a Markdown parser even with
+    unsafe_allow_html=True, and 4+ leading spaces on a line make Markdown
+    treat it as a literal code block instead of HTML. Multi-line f-strings
+    written at deep Python indentation (nested loops/ifs) or with manually
+    aligned attribute continuation lines are exactly that case. Flattening
+    every line removes the leading whitespace entirely, so the indentation
+    of the surrounding Python code can never leak into the rendered page.
+    Safe for HTML/CSS: neither cares about whitespace between tags/lines.
+    """
+    flat = " ".join(line.strip() for line in html.strip().splitlines())
+    st.markdown(flat, unsafe_allow_html=True)
+
 # ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
     page_title="RAG Pipeline",
@@ -301,7 +318,7 @@ with st.sidebar:
                 sources = []
  
                 if uploaded_files:
-                    import tempfile, os
+                    import tempfile
                     tmp_dir = Path(tempfile.mkdtemp())
                     for uf in uploaded_files:
                         dest = tmp_dir / uf.name
@@ -367,7 +384,7 @@ with st.sidebar:
  
 if not st.session_state.indexed:
     # Welcome screen
-    st.markdown("""
+    render_html("""
     <div style="text-align:center; padding: 4rem 2rem;">
         <div style="font-family:'IBM Plex Mono',monospace; font-size:3rem; color:#58a6ff;">⬡</div>
         <h2 style="font-family:'IBM Plex Mono',monospace; color:#e8e8e8; margin-top:1rem;">
@@ -393,7 +410,7 @@ if not st.session_state.indexed:
             </div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
  
 else:
     # ── Query input ────────────────────────────────────────────────────────
@@ -434,7 +451,7 @@ else:
         query = item["query"]
         resp = item["response"]
  
-        st.markdown(f"""
+        render_html(f"""
         <div style="font-family:'IBM Plex Mono',monospace; font-size:0.8rem;
                     color:#8b949e; margin-bottom:0.3rem;">
             Q #{st.session_state.total_queries - i}
@@ -443,14 +460,14 @@ else:
                     margin-bottom:0.8rem;">
             {query}
         </div>
-        """, unsafe_allow_html=True)
+        """)
  
         if resp.refused:
-            st.markdown(f"""
+            render_html(f"""
             <div class="refused-banner">
                 ⚠ REFUSED — {resp.refusal_reason}
             </div>
-            """, unsafe_allow_html=True)
+            """)
  
         else:
             # ── Answer card ────────────────────────────────────────────────
@@ -458,7 +475,7 @@ else:
                          "#f0883e" if resp.confidence >= 0.35 else "#f85149"
             conf_pct = int(resp.confidence * 100)
  
-            st.markdown(f"""
+            render_html(f"""
             <div class="rag-card rag-card-accent">
                 <div style="display:flex; justify-content:space-between;
                             align-items:center; margin-bottom:0.8rem;">
@@ -474,16 +491,16 @@ else:
                 </div>
                 <div class="answer-text">{resp.answer}</div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
  
             # ── KG flags ───────────────────────────────────────────────────
             if resp.kg_flags:
-                st.markdown(f"""
+                render_html(f"""
                 <div class="kg-flag">
                     ⚠ KG flag — entities not grounded in corpus:
                     <strong>{', '.join(resp.kg_flags)}</strong>
                 </div>
-                """, unsafe_allow_html=True)
+                """)
  
             # ── Citations ──────────────────────────────────────────────────
             if resp.citations:
@@ -505,7 +522,7 @@ else:
                             if section_str else ''
                         )
  
-                        st.markdown(f"""
+                        render_html(f"""
                         <div class="rag-card" style="margin-bottom:0.7rem;">
                             <div style="display:flex; justify-content:space-between;
                                         align-items:baseline;">
@@ -528,17 +545,17 @@ else:
                             </div>
                             <div class="chunk-text">{c['text']}</div>
                         </div>
-                        """, unsafe_allow_html=True)
+                        """)
  
             # ── Sources ────────────────────────────────────────────────────
             if resp.sources:
                 sources_str = " · ".join(Path(s).name for s in resp.sources)
-                st.markdown(f"""
+                render_html(f"""
                 <div style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem;
                             color:#8b949e; margin-top:0.3rem;">
                     Sources: {sources_str} · {resp.latency_ms:.0f} ms
                 </div>
-                """, unsafe_allow_html=True)
+                """)
  
         if i < len(st.session_state.history) - 1:
             st.markdown("---")

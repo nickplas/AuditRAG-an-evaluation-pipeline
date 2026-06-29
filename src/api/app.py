@@ -22,7 +22,6 @@ from __future__ import annotations
 import time
 from collections import deque
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Deque
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -32,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from src.config import settings
 from src.pipeline import RAGPipeline
+from src.ingestion.ingestor import ALL_SUPPORTED
 
 
 # ── Shared state ──────────────────────────────────────────────────────────────
@@ -53,9 +53,12 @@ async def lifespan(app: FastAPI):
         in_memory=False,       # Use real Qdrant in production
         use_knowledge_graph=True,
     )
-    # Auto-index on startup if data directory exists and has documents
+    # Auto-index on startup if data directory exists and has supported documents
     data_dir = settings.data_dir
-    if data_dir.exists() and any(data_dir.rglob("*.txt")) or any(data_dir.rglob("*.pdf") if data_dir.exists() else []):
+    has_documents = data_dir.exists() and any(
+        p.suffix.lower() in ALL_SUPPORTED for p in data_dir.rglob("*")
+    )
+    if has_documents:
         logger.info(f"Auto-indexing from {data_dir}…")
         pipeline.index(data_dir)
     yield

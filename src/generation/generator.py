@@ -9,7 +9,12 @@ from dataclasses import dataclass, field
 
 import torch
 from loguru import logger
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSeq2SeqLM,
+    AutoModelForCausalLM,
+    AutoConfig,
+)
 
 from src.config import settings
 from src.retrieval.retriever import RetrievedChunk
@@ -58,13 +63,16 @@ class RAGResponse:
 
 class RAGGenerator:
     """
-    Wraps a HuggingFace seq2seq model with retrieval-augmented prompting,
-    citation injection, and optional KG cross-checking.
+    Wraps a HuggingFace language model with retrieval-augmented prompting,
+    citation injection, and optional KG cross-checking. Works with both
+    encoder-decoder models (e.g. flan-t5) and decoder-only instruct models
+    (e.g. Qwen3, Llama-3, Phi-3.5) — architecture is auto-detected from the
+    model's config, so switching settings.llm_model is enough on its own.
 
     Parameters
     ----------
     model_name : str
-        Any HuggingFace seq2seq model (default: flan-t5-base).
+        Any HuggingFace seq2seq or causal LM (default: Qwen3-4B-Instruct-2507).
     knowledge_graph : KnowledgeGraph | None
         If provided, answers are cross-checked against structured facts.
     device : str | None
@@ -96,10 +104,29 @@ class RAGGenerator:
         self.device = device
         logger.info(f"Generator using device: {device}")
 
+        # Detect architecture so this works with both encoder-decoder models
+        # (e.g. flan-t5) and decoder-only instruct models (e.g. Qwen2.5,
+        # Llama-3, Phi-3.5) without needing a separate config flag that could
+        # drift out of sync with whatever model_name is actually set to.
+        config = AutoConfig.from_pretrained(model_name)
+        self.is_encoder_decoder = bool(getattr(config, "is_encoder_decoder", False))
+
+        # fp16 on GPU/MPS halves memory vs fp32 — important on memory-constrained
+        # devices (e.g. a 16GB Apple Silicon machine). fp16 on plain CPU can be
+        # slow/unsupported for some ops, so fall back to fp32 there.
+        dtype = torch.float16 if device in ("cuda", "mps") else torch.float32
+
         # Load model
-        logger.info(f"Loading LLM: {model_name}")
+        logger.info(f"Loading LLM: {model_name} "
+                    f"({'encoder-decoder' if self.is_encoder_decoder else 'causal'}, dtype={dtype})")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        model_cls = AutoModelForSeq2SeqLM if self.is_encoder_decoder else AutoModelForCausalLM
+        self.model = model_cls.from_pretrained(
+            model_name, torch_dtype=dtype, low_cpu_mem_usage=True
+        )
         self.model.to(device)
         self.model.eval()
 
@@ -156,25 +183,57 @@ class RAGGenerator:
         context = "\n\n".join(context_lines)
 
         # Step 3: Prompt
-        prompt = self._build_prompt(query, context)
-        logger.debug(f"Prompt length: {len(prompt)} chars")
+        # Encoder-decoder models (flan-t5 etc.) take a flat instruction string.
+        # Causal/decoder-only instruct models (Qwen2.5, Llama-3, Phi-3.5 etc.)
+        # expect chat-formatted turns via apply_chat_template.
+        if self.is_encoder_decoder:
+            prompt = self._build_prompt(query, context)
+            logger.debug(f"Prompt length: {len(prompt)} chars")
+            inputs = self.tokenizer(
+                prompt, return_tensors="pt", truncation=True, max_length=1024,
+            ).to(self.device)
+        else:
+            messages = self._build_messages(query, context)
+            prompt = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+            )
+            logger.debug(f"Prompt length: {len(prompt)} chars")
+            inputs = self.tokenizer(
+                prompt, return_tensors="pt", truncation=True, max_length=2048,
+            ).to(self.device)
 
-        inputs = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=1024,
-        ).to(self.device)
+        gen_kwargs = dict(
+            max_new_tokens=settings.llm_max_new_tokens,
+            min_new_tokens=settings.llm_min_new_tokens,
+            no_repeat_ngram_size=3,
+            temperature=settings.llm_temperature if settings.llm_temperature > 0 else 1.0,
+            do_sample=settings.llm_temperature > 0,
+        )
+        if self.is_encoder_decoder:
+            # Beam search is cheap here since seq2seq generation isn't
+            # carrying the input context through the KV cache the way
+            # causal-LM decoding does.
+            gen_kwargs["num_beams"] = 4
+        else:
+            # Plain sampling/greedy for causal LMs — beam search multiplies
+            # KV-cache memory and compute by num_beams, which matters on a
+            # memory-constrained laptop. repetition_penalty does similar
+            # anti-repetition work for decoder-only models without that cost.
+            gen_kwargs["repetition_penalty"] = 1.1
+            gen_kwargs["pad_token_id"] = self.tokenizer.pad_token_id
 
         with torch.no_grad():
-            output_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=settings.llm_max_new_tokens,
-                temperature=settings.llm_temperature if settings.llm_temperature > 0 else 1.0,
-                do_sample=settings.llm_temperature > 0,
-            )
+            output_ids = self.model.generate(**inputs, **gen_kwargs)
 
-        raw_output = self.tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+        if self.is_encoder_decoder:
+            raw_output = self.tokenizer.decode(output_ids[0], skip_special_tokens=True).strip()
+        else:
+            # Causal LMs return the full sequence (prompt + continuation) —
+            # slice off the prompt tokens or the model's own input would get
+            # echoed back as part of "the answer".
+            prompt_len = inputs["input_ids"].shape[-1]
+            new_tokens = output_ids[0][prompt_len:]
+            raw_output = self.tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
         # Step 4: Detect model self-refusal
         if self._is_self_refusal(raw_output):
@@ -211,23 +270,65 @@ class RAGGenerator:
             sources=self._dedupe_sources(relevant),
         )
 
-    # Prompt template 
+    # Prompt template (encoder-decoder models, e.g. flan-t5)
     @staticmethod
     def _build_prompt(query: str, context: str) -> str:
         """
         Instruction-tuned prompt for Flan-T5 / similar models.
-        The explicit citation instruction is key for auditability.
+
+        Explicitly asks for a synthesized, explained answer rather than a
+        single copied sentence — small instruction-tuned models default to
+        short extractive answers unless told otherwise. Citations are still
+        mandatory and the model is still confined to the provided passages;
+        "explain more" must not mean "invent more."
         """
         return (
-            "You are a precise, factual assistant. Answer the question rephrasing "
-            "the information from the original document and add the numbered context passages below. "
-            "Cite the passage numbers (e.g. [1], [2]) inline for every claim. "
-            "If the context does not contain enough information to answer, "
-            "say exactly: 'I cannot answer this from the available context.'\n\n"
-            f"Context:\n{context}\n\n"
+            "You are a precise, factual research assistant helping someone "
+            "understand a document.\n\n"
+            "Using ONLY the numbered passages below, write a clear, well-explained "
+            "answer to the question. Do not just copy one sentence — synthesize "
+            "the relevant information across passages into a coherent explanation: "
+            "what it means, how the pieces relate to each other, and why it answers "
+            "the question. Every factual claim must cite the passage number(s) it "
+            "comes from, e.g. [1], [2]. Do not introduce any fact that isn't in the "
+            "passages below.\n\n"
+            "If the passages don't contain enough information to answer, say "
+            "exactly: 'I cannot answer this from the available context.'\n\n"
+            f"Passages:\n{context}\n\n"
             f"Question: {query}\n\n"
-            "Answer (with inline citations):"
+            "Write a thorough, well-cited answer (at least 3-4 sentences):"
         )
+
+    # Prompt template (decoder-only instruct models, e.g. Qwen2.5, Llama-3)
+    @staticmethod
+    def _build_messages(query: str, context: str) -> list[dict]:
+        """
+        Chat-formatted turns for apply_chat_template. Same grounding rules
+        as _build_prompt, split into a system instruction + user turn —
+        the structure these models were actually instruction-tuned on.
+        """
+        system = (
+            "You are a precise, factual research assistant. Answer using ONLY "
+            "the numbered passages the user provides. Never introduce a fact "
+            "that isn't in them. Cite passage numbers inline, e.g. [1], [2], "
+            "for every claim. If the passages don't contain enough information "
+            "to answer, say exactly: 'I cannot answer this from the available "
+            "context.'"
+        )
+        user = (
+            "Using the passages below, write a clear, well-explained answer to "
+            "the question. Don't just copy one sentence — synthesize the "
+            "relevant information across passages into a coherent explanation: "
+            "what it means, how the pieces relate to each other, and why it "
+            "answers the question.\n\n"
+            f"Passages:\n{context}\n\n"
+            f"Question: {query}\n\n"
+            "Write a thorough, well-cited answer (at least 3-4 sentences):"
+        )
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
 
     # Helpers 
     def _is_self_refusal(self, text: str) -> bool:

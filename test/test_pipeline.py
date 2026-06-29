@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.ingestion.ingestor import DocumentIngestor, Chunk
-from src.retrieval.retriever import Embedder, VectorStore, RetrievedChunk
+from src.ingestion.ingestor import DocumentIngestor
+from src.retrieval.retriever import Embedder, VectorStore
 from src.pipeline import RAGPipeline
 
 

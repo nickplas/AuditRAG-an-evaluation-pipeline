@@ -16,8 +16,9 @@ class Settings(BaseSettings):
     embedding_dim: int = 384
 
     # LLM model
-    llm_model: str = "google/flan-t5-xl"
+    llm_model: str = "Qwen/Qwen3-4B-Instruct-2507"
     llm_max_new_tokens: int = 512
+    llm_min_new_tokens: int = 96
     llm_temperature: float = 0.1
 
     # Chunks

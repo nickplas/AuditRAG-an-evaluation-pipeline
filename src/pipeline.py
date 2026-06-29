@@ -21,7 +21,7 @@ from loguru import logger
 
 from src.config import settings
 from src.ingestion.ingestor import DocumentIngestor, Chunk
-from src.retrieval.retriever import Embedder, VectorStore, Retriever 
+from src.retrieval.retriever import Embedder, Retriever 
 from src.generation.generator import RAGGenerator, RAGResponse
 from src.knowledge_graph.kg_builder import KnowledgeGraphBuilder, KnowledgeGraph
 

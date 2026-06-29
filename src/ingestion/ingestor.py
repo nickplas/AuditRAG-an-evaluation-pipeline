@@ -4,7 +4,10 @@ ingestion/ingestor.py — Document loading, conversion to Markdown, and chunking
 All file types are normalised to Markdown first via MarkItDown, then chunked.
 This gives two advantages:
   1. Consistent text quality across formats — MarkItDown preserves headings,
-     tables, and lists rather than dumping raw characters like PyMuPDF does.
+     tables, and lists for most formats. For PDFs specifically, text is
+     extracted via PyMuPDF instead of MarkItDown's default pdfminer-based
+     backend, which fixes a missing-word-spacing bug pdfminer has on some
+     PDFs (see _PyMuPDFPdfConverter below).
   2. Token efficiency — Markdown is ~30-50% more compact than raw PDF text
      because it removes repeated whitespace, page headers/footers, and
      table-of-contents dots.
@@ -28,7 +31,6 @@ sections that are too large.
  
 from __future__ import annotations
  
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,7 +38,7 @@ from pathlib import Path
 from loguru import logger
  
 try:
-    from markitdown import MarkItDown
+    from markitdown import MarkItDown, DocumentConverter, DocumentConverterResult
     _MARKITDOWN_AVAILABLE = True
 except ImportError:
     _MARKITDOWN_AVAILABLE = False
@@ -44,10 +46,53 @@ except ImportError:
         "markitdown not installed — PDF/Office/HTML conversion disabled. "
         "Run: pip install 'markitdown[all]'"
     )
- 
+
+try:
+    import fitz  # PyMuPDF
+    _PYMUPDF_AVAILABLE = True
+except ImportError:
+    _PYMUPDF_AVAILABLE = False
+
 from src.config import settings
- 
- 
+
+
+# ── PDF extraction override ────────────────────────────────────────────
+#
+# MarkItDown's built-in PDF converter falls back to pdfminer.six for any PDF
+# that isn't form/table-style (i.e. most prose documents). pdfminer infers
+# word boundaries from the spacing encoded in the PDF's text-positioning
+# operators — and some PDFs (especially LaTeX-produced academic papers with
+# subset/custom-encoded fonts) don't encode that reliably, so pdfminer drops
+# spaces and produces "wordsruntogetherlikethis". PyMuPDF reconstructs words
+# from glyph bounding-box positions instead, which is far more robust to this
+# class of font and avoids the issue for the documents that trigger it.
+#
+# Registering this converter only changes *PDF* extraction. Every other
+# format MarkItDown handles (docx, pptx, xlsx, html, csv, json, xml, epub,
+# zip) — and the token-efficiency benefits of converting them to Markdown —
+# is completely unaffected.
+
+if _MARKITDOWN_AVAILABLE and _PYMUPDF_AVAILABLE:
+
+    class _PyMuPDFPdfConverter(DocumentConverter):
+        """Drop-in replacement for MarkItDown's PDF converter using PyMuPDF."""
+
+        def accepts(self, file_stream, stream_info, **kwargs) -> bool:
+            mimetype = (stream_info.mimetype or "").lower()
+            extension = (stream_info.extension or "").lower()
+            return extension == ".pdf" or mimetype.startswith("application/pdf")
+
+        def convert(self, file_stream, stream_info, **kwargs) -> DocumentConverterResult:
+            pdf_bytes = file_stream.read()
+            page_texts: list[str] = []
+            with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+                for page in doc:
+                    text = page.get_text("text")
+                    if text and text.strip():
+                        page_texts.append(text.strip())
+            return DocumentConverterResult(markdown="\n\n".join(page_texts).strip())
+
+
 # ── Supported extensions ──────────────────────────────────────────────────────
  
 # Handled natively (no conversion needed)
@@ -87,10 +132,20 @@ class MarkdownConverter:
     """
     Converts any supported file to a Markdown string using MarkItDown.
     Falls back to plain-text reading for .txt and .md files.
+
+    PDF extraction is upgraded to PyMuPDF (see _PyMuPDFPdfConverter above)
+    when available, instead of MarkItDown's default pdfminer-based backend.
     """
  
     def __init__(self):
         self._md = MarkItDown(enable_plugins=False) if _MARKITDOWN_AVAILABLE else None
+        if self._md is not None and _PYMUPDF_AVAILABLE:
+            # Registered after the defaults above, so it's tried before the
+            # built-in PdfConverter for .pdf files specifically (see
+            # MarkItDown.register_converter's priority/ordering rules).
+            # accepts() returns False for every other extension, so all
+            # other formats keep using MarkItDown's normal converters.
+            self._md.register_converter(_PyMuPDFPdfConverter())
  
     def convert(self, path: Path) -> str:
         """Return the Markdown representation of *path*."""
